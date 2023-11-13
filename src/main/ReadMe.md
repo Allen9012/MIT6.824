@@ -1,0 +1,1 @@
+Lab 1要求我们实现一个和MapReduce论文类似的机制，也就是数单词个数Word Count
