@@ -7,10 +7,11 @@ package main
 // go build -buildmode=plugin rtiming.go
 //
 
-import "6.5840/mr"
-import "fmt"
+import (
+	"fmt"
+	"github.com/Allen9012/MIT6.824/mr"
+)
 import "os"
-import "syscall"
 import "time"
 import "io/ioutil"
 
@@ -40,7 +41,7 @@ func nparallel(phase string) int {
 		pat := fmt.Sprintf("mr-worker-%s-%%d", phase)
 		n, err := fmt.Sscanf(name, pat, &xpid)
 		if n == 1 && err == nil {
-			err := syscall.Kill(xpid, 0)
+			_, err := os.FindProcess(pid)
 			if err == nil {
 				// if err == nil, xpid is alive.
 				ret += 1

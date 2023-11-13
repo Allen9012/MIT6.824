@@ -8,8 +8,10 @@ package main
 // go build -buildmode=plugin crash.go
 //
 
-import "6.5840/mr"
-import crand "crypto/rand"
+import (
+	crand "crypto/rand"
+	"github.com/Allen9012/MIT6.824/mr"
+)
 import "math/big"
 import "strings"
 import "os"

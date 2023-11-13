@@ -1,8 +1,10 @@
 package shardctrler
 
-import "6.5840/labrpc"
-import "6.5840/raft"
-import "testing"
+import (
+	"github.com/Allen9012/MIT6.824/labrpc"
+	"github.com/Allen9012/MIT6.824/raft"
+	"testing"
+)
 import "os"
 
 // import "log"

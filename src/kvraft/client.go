@@ -1,7 +1,9 @@
 package kvraft
 
-import "6.5840/labrpc"
-import "crypto/rand"
+import (
+	"crypto/rand"
+	"github.com/Allen9012/MIT6.824/labrpc"
+)
 import "math/big"
 
 type Clerk struct {

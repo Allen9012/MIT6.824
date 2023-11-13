@@ -5,7 +5,6 @@ package main
 //
 
 import "time"
-import "github.com/Allen9012/MIT6.824/viewservice"
 import "os"
 import "fmt"
 

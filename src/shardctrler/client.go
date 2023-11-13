@@ -4,8 +4,10 @@ package shardctrler
 // Shardctrler clerk.
 //
 
-import "6.5840/labrpc"
-import "time"
+import (
+	"github.com/Allen9012/MIT6.824/labrpc"
+	"time"
+)
 import "crypto/rand"
 import "math/big"
 

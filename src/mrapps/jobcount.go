@@ -8,8 +8,10 @@ package main
 // go build -buildmode=plugin crash.go
 //
 
-import "6.5840/mr"
-import "math/rand"
+import (
+	"github.com/Allen9012/MIT6.824/mr"
+	"math/rand"
+)
 import "strings"
 import "strconv"
 import "time"

@@ -7,8 +7,10 @@ package main
 // go build -buildmode=plugin mtiming.go
 //
 
-import "6.5840/mr"
-import "strings"
+import (
+	"github.com/Allen9012/MIT6.824/mr"
+	"strings"
+)
 import "fmt"
 import "os"
 import "syscall"

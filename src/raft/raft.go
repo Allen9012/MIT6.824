@@ -18,14 +18,13 @@ package raft
 //
 
 import (
+	"github.com/Allen9012/MIT6.824/labrpc"
 	//	"bytes"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
-
 	//	"6.5840/labgob"
-	"6.5840/labrpc"
 )
 
 // as each Raft peer becomes aware that successive log entries are
