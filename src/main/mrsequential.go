@@ -6,8 +6,10 @@ package main
 // go run mrsequential.go wc.so pg*.txt
 //
 
-import "fmt"
-import "6.5840/mr"
+import (
+	"fmt"
+	"github.com/Allen9012/MIT6.824/mr"
+)
 import "plugin"
 import "os"
 import "log"
@@ -86,7 +88,7 @@ func main() {
 	ofile.Close()
 }
 
-// load the application Map and Reduce functions
+// load the application Map and Reduce functions with go plugin
 // from a plugin file, e.g. ../mrapps/wc.so
 func loadPlugin(filename string) (func(string, string) []mr.KeyValue, func(string, []string) string) {
 	p, err := plugin.Open(filename)
