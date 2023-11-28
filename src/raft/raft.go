@@ -60,6 +60,27 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// self design args
+	state         RaftState
+	appendEntryCh chan *Entry
+	heartBeat     time.Duration
+	electionTime  time.Time
+
+	// Persistent state on all servers:
+	currentTerm int
+	votedFor    int
+	log         Log
+
+	// Volatile state on all servers:
+	commitIndex int
+	lastApplied int
+
+	// Volatile state on leaders:
+	nextIndex  []int
+	matchIndex []int
+
+	applyCh   chan ApplyMsg
+	applyCond *sync.Cond
 }
 
 // return currentTerm and whether this server
@@ -119,23 +140,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
-}
-
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
-type RequestVoteReply struct {
-	// Your data here (2A).
-}
-
-// example RequestVote RPC handler.
-func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
-}
-
 // example code to send a RequestVote RPC to a server.
 // server is the index of the target server in rf.peers[].
 // expects RPC arguments in args.
@@ -181,13 +185,25 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.state != Leader {
+		return -1, rf.currentTerm, false
+	}
 	index := -1
-	term := -1
-	isLeader := true
+	term := rf.currentTerm
 
-	// Your code here (2B).
+	log := Entry{
+		Command: command,
+		Index:   index,
+		Term:    term,
+	}
+	//rf.persist()
+	DPrintf("[%v]: term %v Start %v", rf.me, term, log)
+	// 启动之后写日志
+	rf.appendEntries(false)
 
-	return index, term, isLeader
+	return index, term, true
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -209,17 +225,101 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+// The ticker go routine starts a new election if this peer hasn't received
+// heartsbeats recently.
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
+		time.Sleep(rf.heartBeat)
 
-		// pause for a random amount of time between 50 and 350
-		// milliseconds.
+		// 1. 当前为主，每一段倒计时写日志
+		// 2. 当前为从，超时则发动选举
+		rf.mu.Lock()
+		if rf.state == Leader {
+			rf.appendEntries(true)
+		}
+		// 超时发动选举，需要再做一遍检查！！不是直接发动选举
+		if time.Now().After(rf.electionTime) {
+			rf.leaderElection()
+		}
+		rf.mu.Unlock()
+
+		// pause for a random amount of time between 50 and 350 milliseconds.
 		ms := 50 + (rand.Int63() % 300)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
+}
+
+// 选举函数
+func (rf *Raft) leaderElection() {
+	rf.currentTerm++
+	rf.state = Candidate
+	rf.votedFor = rf.me
+	//rf.persister()
+	rf.resetElectionTimer()
+	term := rf.currentTerm
+	voteCounter := 1
+
+	args := RequestVoteArgs{
+		Term:        term,
+		CandidateId: rf.me,
+	}
+
+	var becomeLeader sync.Once
+
+	// 发送请求投票
+	for serverId := range rf.peers {
+		if serverId == rf.me {
+			continue
+		}
+		go rf.candidateRequestVote(serverId, &args, &voteCounter, &becomeLeader)
+	}
+}
+
+func (rf *Raft) resetElectionTimer() {
+
+}
+
+// candidate candidateRequestVote
+func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, voteCounter *int, becomeLeader *sync.Once) {
+	reply := RequestVoteReply{}
+	// 对指定server发送rpc 请求投票
+	ok := rf.sendRequestVote(serverId, args, &reply)
+	if !ok {
+		return
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if reply.Term > args.Term { // 请求投票发现term更新，已经有新主
+		rf.setNewTerm(reply.Term)
+		return
+	}
+	if reply.Term < args.Term { // reply false
+		return
+	}
+	if !reply.VoteGranted { // 请求投票中发现不投票
+		return
+	}
+	*voteCounter++
+
+	// 计数满足条件, 且再次判断term
+	if *voteCounter > len(rf.peers)/2 && rf.currentTerm == args.Term && rf.state == Candidate {
+		// once 保证只会切换和发送heartbeat一次
+		becomeLeader.Do(func() {
+			rf.state = Leader
+			// 立刻发送一次心跳
+			rf.appendEntries(true)
+		})
+	}
+}
+
+// 更新term
+func (rf *Raft) setNewTerm(term int) {
+
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -237,6 +337,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.applyCh = make(chan ApplyMsg)
+	rf.appendEntryCh = make(chan *Entry)
+	rf.applyCond = sync.NewCond(&sync.Mutex{})
 
 	// Your initialization code here (2A, 2B, 2C).
 
