@@ -19,8 +19,6 @@ package raft
 
 import (
 	"github.com/Allen9012/MIT6.824/labrpc"
-	//	"bytes"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -90,6 +88,8 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	term = rf.currentTerm
+	isleader = rf.state == Leader
 	return term, isleader
 }
 
@@ -101,34 +101,35 @@ func (rf *Raft) GetState() (int, bool) {
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// raftstate := w.Bytes()
-	// rf.persister.Save(raftstate, nil)
+	//DPrintVerbose("[%v]: STATE: %v", rf.me, rf.log.String())
+	//w := new(bytes.Buffer)
+	//e := labgob.NewEncoder(w)
+	//e.Encode(rf.currentTerm)
+	//e.Encode(rf.votedFor)
+	//e.Encode(rf.log)
+	//data := w.Bytes()
+	//rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
-		return
-	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	//if data == nil || len(data) < 1 { // bootstrap without any state?
+	//	return
+	//}
+	//
+	//r := bytes.NewBuffer(data)
+	//d := labgob.NewDecoder(r)
+	//var currentTerm int
+	//var votedFor int
+	//var logs Log
+	//
+	//if d.Decode(&currentTerm) != nil || d.Decode(&votedFor) != nil || d.Decode(&logs) != nil {
+	//	log.Fatal("failed to read persist\n")
+	//} else {
+	//	rf.currentTerm = currentTerm
+	//	rf.votedFor = votedFor
+	//	rf.log = logs
+	//}
 }
 
 // the service says it has created a snapshot that has
@@ -198,9 +199,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Index:   index,
 		Term:    term,
 	}
-	//rf.persist()
+	rf.persist()
 	DPrintf("[%v]: term %v Start %v", rf.me, term, log)
-	// 启动之后写日志
+	// TODO 启动之后写日志
 	rf.appendEntries(false)
 
 	return index, term, true
@@ -245,81 +246,7 @@ func (rf *Raft) ticker() {
 			rf.leaderElection()
 		}
 		rf.mu.Unlock()
-
-		// pause for a random amount of time between 50 and 350 milliseconds.
-		ms := 50 + (rand.Int63() % 300)
-		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
-}
-
-// 选举函数
-func (rf *Raft) leaderElection() {
-	rf.currentTerm++
-	rf.state = Candidate
-	rf.votedFor = rf.me
-	//rf.persister()
-	rf.resetElectionTimer()
-	term := rf.currentTerm
-	voteCounter := 1
-
-	args := RequestVoteArgs{
-		Term:        term,
-		CandidateId: rf.me,
-	}
-
-	var becomeLeader sync.Once
-
-	// 发送请求投票
-	for serverId := range rf.peers {
-		if serverId == rf.me {
-			continue
-		}
-		go rf.candidateRequestVote(serverId, &args, &voteCounter, &becomeLeader)
-	}
-}
-
-func (rf *Raft) resetElectionTimer() {
-
-}
-
-// candidate candidateRequestVote
-func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, voteCounter *int, becomeLeader *sync.Once) {
-	reply := RequestVoteReply{}
-	// 对指定server发送rpc 请求投票
-	ok := rf.sendRequestVote(serverId, args, &reply)
-	if !ok {
-		return
-	}
-
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	if reply.Term > args.Term { // 请求投票发现term更新，已经有新主
-		rf.setNewTerm(reply.Term)
-		return
-	}
-	if reply.Term < args.Term { // reply false
-		return
-	}
-	if !reply.VoteGranted { // 请求投票中发现不投票
-		return
-	}
-	*voteCounter++
-
-	// 计数满足条件, 且再次判断term
-	if *voteCounter > len(rf.peers)/2 && rf.currentTerm == args.Term && rf.state == Candidate {
-		// once 保证只会切换和发送heartbeat一次
-		becomeLeader.Do(func() {
-			rf.state = Leader
-			// 立刻发送一次心跳
-			rf.appendEntries(true)
-		})
-	}
-}
-
-// 更新term
-func (rf *Raft) setNewTerm(term int) {
-
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -337,17 +264,40 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+
+	// Your initialization code here (2A, 2B, 2C).
+	rf.heartBeat = 50 * time.Millisecond
+	rf.state = Follower
+	rf.currentTerm = 0
+	rf.votedFor = -1
+	rf.resetElectionTimer() // 初始化倒计时
+	// TODO 日志相关初始化
+
 	rf.applyCh = make(chan ApplyMsg)
 	rf.appendEntryCh = make(chan *Entry)
 	rf.applyCond = sync.NewCond(&sync.Mutex{})
-
-	// Your initialization code here (2A, 2B, 2C).
-
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-
+	go rf.applier() // 把command应用到state machine
 	return rf
 }
+
+func (rf *Raft) apply() {
+	rf.applyCond.Broadcast()
+	DPrintf("[%v]: rf.applyCond.Broadcast()", rf.me)
+}
+
+func (rf *Raft) applier() {
+
+}
+
+//func (rf *Raft) commits() string {
+//	nums := []string{}
+//	for i := 0; i <= rf.lastApplied; i++ {
+//		nums = append(nums, fmt.Sprintf("%4d", rf.log.at(i).Command))
+//	}
+//	return fmt.Sprint(strings.Join(nums, "|"))
+//}

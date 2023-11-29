@@ -1,5 +1,7 @@
 package raft
 
+import "sync"
+
 /**
   Copyright © 2023 github.com/Allen9012 All rights reserved.
   @author: Allen
@@ -53,4 +55,51 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	// 最后更新term（统一reply对应当前机器raft的term）
 	reply.Term = rf.currentTerm
+}
+
+// candidate candidateRequestVote
+func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, voteCounter *int, becomeLeader *sync.Once) {
+	DPrintf("[%d]: term %v send vote request to %d\n", rf.me, args.Term, serverId)
+	reply := RequestVoteReply{}
+	// 对指定server发送rpc 请求投票
+	ok := rf.sendRequestVote(serverId, args, &reply)
+	if !ok {
+		return
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	// 收到reply后处理
+	if reply.Term > args.Term {
+		DPrintf("[%d]: %d 在新的term，更新term，结束\n", rf.me, serverId)
+		rf.setNewTerm(reply.Term)
+		return
+	}
+	// request vote rule 1
+	if reply.Term < args.Term {
+		DPrintf("[%d]: %d 的term %d 已经失效，结束\n", rf.me, serverId, reply.Term)
+		return
+	}
+	if !reply.VoteGranted { // 请求投票中发现不投票
+		DPrintf("[%d]: %d 没有投给me，结束\n", rf.me, serverId)
+		return
+	}
+	DPrintf("[%d]: from %d term一致，且投给%d\n", rf.me, serverId, rf.me)
+	*voteCounter++
+
+	// 计数满足条件, 且再次判断term
+	if *voteCounter > len(rf.peers)/2 &&
+		rf.currentTerm == args.Term &&
+		rf.state == Candidate {
+		// once 保证只会切换和发送heartbeat一次
+		becomeLeader.Do(func() {
+			DPrintf("[%d]: 获得多数选票，可以提前结束\n", rf.me)
+			rf.state = Leader
+			// TODO 日志
+
+			DPrintf("[%d]: leader - nextIndex %#v", rf.me, rf.nextIndex)
+			// 立刻发送一次心跳
+			rf.appendEntries(true)
+		})
+	}
 }
