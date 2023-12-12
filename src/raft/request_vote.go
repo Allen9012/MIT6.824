@@ -46,10 +46,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	// request vote rpc receiver 2
-	if rf.votedFor == -1 || rf.votedFor == args.CandidateId { // 没有投票或者已经投票过指定
-		rf.votedFor = args.CandidateId //投给 candidate
+	myLastLog := rf.log.lastLog()
+	// Up To Date
+	//1. 候选人最后一条Log条目的任期号大于本地最后一条Log条目的任期号；
+	//2. 或者，候选人最后一条Log条目的任期号等于本地最后一条Log条目的任期号，且候选人的Log记录长度大于等于本地Log记录的长度
+	UpToDate := args.LastLogTerm > myLastLog.Term || (args.LastLogTerm == myLastLog.Term && args.LastLogIndex >= myLastLog.Index)
+	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && UpToDate { // 没有投票或者已经投票过指定
+		rf.votedFor = args.CandidateId // 投给 candidate
 		reply.VoteGranted = true       // 表示投candidate
+		rf.persist()
 		rf.resetElectionTimer()
+		DPrintf("[%v]: term %v vote %v", rf.me, rf.currentTerm, rf.votedFor)
 	} else {
 		reply.VoteGranted = false
 	}
@@ -91,12 +98,17 @@ func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, voteCo
 	if *voteCounter > len(rf.peers)/2 &&
 		rf.currentTerm == args.Term &&
 		rf.state == Candidate {
+		DPrintf("[%d]: 获得多数选票，可以提前结束\n", rf.me)
 		// once 保证只会切换和发送heartbeat一次
 		becomeLeader.Do(func() {
-			DPrintf("[%d]: 获得多数选票，可以提前结束\n", rf.me)
+			DPrintf("[%d]: 当前term %d 结束\n", rf.me, rf.currentTerm)
 			rf.state = Leader
-			// TODO 日志
-
+			// 更新日志
+			lastLogIndex := rf.log.lastLog().Index
+			for i, _ := range rf.peers {
+				rf.nextIndex[i] = lastLogIndex + 1
+				rf.matchIndex[i] = 0
+			}
 			DPrintf("[%d]: leader - nextIndex %#v", rf.me, rf.nextIndex)
 			// 立刻发送一次心跳
 			rf.appendEntries(true)

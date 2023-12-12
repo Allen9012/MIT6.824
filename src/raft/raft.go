@@ -18,7 +18,12 @@ package raft
 //
 
 import (
+	"bytes"
+	"fmt"
+	"github.com/Allen9012/MIT6.824/labgob"
 	"github.com/Allen9012/MIT6.824/labrpc"
+	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,10 +64,10 @@ type Raft struct {
 	// state a Raft server must maintain.
 
 	// self design args
-	state         RaftState
-	appendEntryCh chan *Entry
-	heartBeat     time.Duration
-	electionTime  time.Time
+	state RaftState
+	//appendEntryCh chan *Entry
+	heartBeat    time.Duration
+	electionTime time.Time
 
 	// Persistent state on all servers:
 	currentTerm int
@@ -74,9 +79,10 @@ type Raft struct {
 	lastApplied int
 
 	// Volatile state on leaders:
-	nextIndex  []int
-	matchIndex []int
+	nextIndex  []int // for each server, index of the next log entry to send to that server(initialized to leader last log index + 1)
+	matchIndex []int // for each server, index of highest log entry known to be replicated on server(initialized to 0, increases monotonically)
 
+	// apply 相关 args
 	applyCh   chan ApplyMsg
 	applyCond *sync.Cond
 }
@@ -101,35 +107,46 @@ func (rf *Raft) GetState() (int, bool) {
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
-	//DPrintVerbose("[%v]: STATE: %v", rf.me, rf.log.String())
-	//w := new(bytes.Buffer)
-	//e := labgob.NewEncoder(w)
-	//e.Encode(rf.currentTerm)
-	//e.Encode(rf.votedFor)
-	//e.Encode(rf.log)
-	//data := w.Bytes()
-	//rf.persister.SaveRaftState(data)
+	// 输出日志
+	DPrintVerbose("[%v]: STATE: %v", rf.me, rf.log.String())
+	w := new(bytes.Buffer)
+	// 使用gob序列化
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
-	//if data == nil || len(data) < 1 { // bootstrap without any state?
-	//	return
-	//}
-	//
-	//r := bytes.NewBuffer(data)
-	//d := labgob.NewDecoder(r)
-	//var currentTerm int
-	//var votedFor int
-	//var logs Log
-	//
-	//if d.Decode(&currentTerm) != nil || d.Decode(&votedFor) != nil || d.Decode(&logs) != nil {
-	//	log.Fatal("failed to read persist\n")
-	//} else {
-	//	rf.currentTerm = currentTerm
-	//	rf.votedFor = votedFor
-	//	rf.log = logs
-	//}
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+	// 从持久化的数据中解码出三个内容
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var logs Log
+
+	if d.Decode(&currentTerm) != nil || d.Decode(&votedFor) != nil || d.Decode(&logs) != nil {
+		log.Fatal("failed to read persist\n")
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.log = logs
+	}
+}
+
+// A service wants to switch to snapshot.  Only do so if Raft hasn't
+// have more recent info since it communicate the snapshot on applyCh.
+func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
+
+	// Your code here (2D).
+
+	return true
 }
 
 // the service says it has created a snapshot that has
@@ -191,7 +208,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	if rf.state != Leader {
 		return -1, rf.currentTerm, false
 	}
-	index := -1
+	index := rf.log.lastLog().Index + 1
 	term := rf.currentTerm
 
 	log := Entry{
@@ -199,9 +216,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Index:   index,
 		Term:    term,
 	}
+	rf.log.append(log)
 	rf.persist()
 	DPrintf("[%v]: term %v Start %v", rf.me, term, log)
-	// TODO 启动之后写日志
 	rf.appendEntries(false)
 
 	return index, term, true
@@ -231,8 +248,9 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
-		// Your code here (2A)
-		// Check if a leader election should be started.
+		// Your code here to check if a leader election should
+		// be started and to randomize sleeping time using
+		// time.Sleep().
 		time.Sleep(rf.heartBeat)
 
 		// 1. 当前为主，每一段倒计时写日志
@@ -271,11 +289,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.resetElectionTimer() // 初始化倒计时
-	// TODO 日志相关初始化
+	//日志相关初始化
+	rf.log = makeEmptyLog()
+	rf.log.append(Entry{-1, 0, 0})
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
 
-	rf.applyCh = make(chan ApplyMsg)
-	rf.appendEntryCh = make(chan *Entry)
-	rf.applyCond = sync.NewCond(&sync.Mutex{})
+	rf.applyCh = applyCh
+	rf.applyCond = sync.NewCond(&rf.mu)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
@@ -291,13 +314,33 @@ func (rf *Raft) apply() {
 }
 
 func (rf *Raft) applier() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	for !rf.killed() {
+		// all server rule 1
+		if rf.commitIndex > rf.lastApplied && rf.log.lastLog().Index > rf.lastApplied {
+			rf.lastApplied++
+			applyMsg := ApplyMsg{
+				CommandValid: true,
+				Command:      rf.log.at(rf.lastApplied).Command,
+				CommandIndex: rf.lastApplied,
+			}
+			DPrintVerbose("[%v]: COMMIT %d: %v", rf.me, rf.lastApplied, rf.commits())
+			rf.mu.Unlock()
+			rf.applyCh <- applyMsg
+			rf.mu.Lock()
+		} else {
+			rf.applyCond.Wait()
+			DPrintf("[%v]: rf.applyCond.Wait()", rf.me)
+		}
+	}
 }
 
-//func (rf *Raft) commits() string {
-//	nums := []string{}
-//	for i := 0; i <= rf.lastApplied; i++ {
-//		nums = append(nums, fmt.Sprintf("%4d", rf.log.at(i).Command))
-//	}
-//	return fmt.Sprint(strings.Join(nums, "|"))
-//}
+func (rf *Raft) commits() string {
+	nums := []string{}
+	for i := 0; i <= rf.lastApplied; i++ {
+		nums = append(nums, fmt.Sprintf("%4d", rf.log.at(i).Command))
+	}
+	return fmt.Sprint(strings.Join(nums, "|"))
+}
